@@ -43,6 +43,7 @@ class HKRRAlgorithm:
             self.max_iter = params['max_iter']
             self.randomized = params['randomized']
             self.use_oracle = params['use_oracle']
+            self.tao_global = params["tao_global"] if "tao_global" in params else 1
 
         except KeyError as e:
             raise ValueError(f"Missing parameter: {e}. Please provide all required parameters (lambda, alpha, max_iter, randomized, use_oracle) as a dictionary.")
@@ -93,7 +94,7 @@ class HKRRAlgorithm:
                     S_v = [i for i in S if (v_i < p[i] <= v_j)]
 
                     # if subset size smaller than tao, throw out
-                    tao = alpha * len(S) / len(V_range)
+                    tao = max(tao_global, alpha * len(S) / len(V_range))
                     if len(S_v) < tao:
                         continue
 
