@@ -27,7 +27,18 @@ class HKRRAlgorithm:
         params: dictionary of hyperparameters
         """
         try:
-            self.lmbda = params['lambda']
+            self.lmbda_type = params["lambda_type"]
+
+            if self.lmbda_type == "uniform":
+                self.lmbda = params["lambda"]
+            elif self.lmbda_type == "range":
+                self.lmbda_range = params["lambda_range"]
+                assert len(self.lmbda_range) > 0
+                assert self.lmbda_range[0] == 0 and self.lmbda_range[-1] == 1, "Lambda range must start at 0 and end at 1."
+                assert all(self.lmbda_range[i] < self.lmbda_range[i+1] for i in range(len(self.lmbda_range)-1)), "Lambda range values must be strictly increasing."
+            else:
+                raise ValueError("Invalid lambda_type. Must be 'uniform' or 'range'.")
+
             self.alpha = params['alpha']
             self.max_iter = params['max_iter']
             self.randomized = params['randomized']
@@ -36,12 +47,10 @@ class HKRRAlgorithm:
         except KeyError as e:
             raise ValueError(f"Missing parameter: {e}. Please provide all required parameters (lambda, alpha, max_iter, randomized, use_oracle) as a dictionary.")
 
-
         # init predictions
         p = confs.copy()
         n = len(confs)
         alpha = self.alpha
-        lmbda = self.lmbda
 
         # count iterations
         iter = 0
@@ -50,7 +59,11 @@ class HKRRAlgorithm:
         v_updated_iters = []
 
         # get probability intervals and subgroups (including complements)
-        V_range = np.arange(0, 1, lmbda)
+        if self.lmbda_type == "uniform":
+            V_range = np.concatenate([np.arange(0, 1, self.lmbda), [1]])
+        else:
+            V_range = np.array(self.lmbda_range)
+
         C = [(i, sg) for i, sg in enumerate(subgroups)]
 
         # repeat until no updates made
@@ -76,12 +89,11 @@ class HKRRAlgorithm:
                 # skip empty subgroups
                 if (len(S) == 0): continue
                 
-                for v in V_range:
-                    S_v = [i for i in S if ((v < p[i] <= v + lmbda) or 
-                                            (v == 0 and v <= p[i] <= v + lmbda))]
+                for v_i, v_j in zip(V_range, V_range[1:]):
+                    S_v = [i for i in S if (v_i < p[i] <= v_j)]
 
                     # if subset size smaller than tao, throw out
-                    tao = alpha * lmbda * len(S)
+                    tao = alpha * len(S) / len(V_range)
                     if len(S_v) < tao:
                         continue
 
@@ -99,10 +111,10 @@ class HKRRAlgorithm:
                             # update steps in procedure
                             delta.append(r - v_hat)
                             subgroup_updated.append(S_idx)
-                            v_updated.append(v)
+                            v_updated.append((v_i, v_j))
                     else:
                         dlta = np.mean(labels[S_v]) - v_hat
-                        if (abs(dlta) < lmbda/10):
+                        if (abs(dlta) < 1/(10 * len(V_range))):
                             continue
                         p[S_v] = np.clip(p[S_v] + dlta, 0, 1)
                         updated = True
@@ -110,10 +122,10 @@ class HKRRAlgorithm:
                         # update steps in procedure
                         delta.append(dlta)
                         subgroup_updated.append(S_idx)
-                        v_updated.append(v)
+                        v_updated.append((v_i, v_j))
 
                     if self.verbose:
-                        print(f"Updated uncertainty estimates for {len(S_v)} points in subgroup {S_idx} with v={v}")
+                        print(f"Updated uncertainty estimates for {len(S_v)} points in subgroup {S_idx} with v=({v_i}, {v_j})")
 
             delta_iters.append(delta)
             subgroup_updated_iters.append(subgroup_updated)
@@ -121,19 +133,17 @@ class HKRRAlgorithm:
 
             # save v_hats for current iteration
             self.v_hat_saved.append({})
-            for v in V_range:
-                v_lmbda = [i for i in range(n) if ((v < p[i] <= v + lmbda) or 
-                                                   (v == 0 and v <= p[i] <= v + lmbda))]
+            for v_i, v_j in zip(V_range, V_range[1:]):
+                v_lmbda = [i for i in range(n) if v_i < p[i] <= v_j]
 
                 # skip empty subgroups
                 if (len(v_lmbda) == 0):
-                    self.v_hat_saved[iter-1][v] = -1
+                    self.v_hat_saved[iter-1][(v_i, v_j)] = -1
                     continue
 
                 v_hat = np.mean(p[v_lmbda])
-                self.v_hat_saved[iter-1][v] = v_hat
+                self.v_hat_saved[iter-1][(v_i, v_j)] = v_hat
 
-        self.lmbda = lmbda
         self.delta_iters = delta_iters
         self.subgroup_updated_iters = subgroup_updated_iters
         self.v_updated_iters = v_updated_iters
@@ -175,25 +185,28 @@ class HKRRAlgorithm:
         subgroup_updated_iters = self.subgroup_updated_iters
         v_updated_iters = self.v_updated_iters
         delta_iters = self.delta_iters
-        lmbda = self.lmbda
+
+        if self.lmbda_type == "uniform":
+            V_range = np.concatenate([np.arange(0, 1, self.lmbda), [1]])
+        else:
+            V_range = np.array(self.lmbda_range)
 
         for subgroup_updated, v_updated, delta in zip(subgroup_updated_iters[:early_stop], v_updated_iters[:early_stop], delta_iters[:early_stop]):
             # for each lvl in circuit
             for lvl in range(len(subgroup_updated)):
                 # check if datapoint belongs to $subgroup \cap lambda(v)$
                 if subgroup_updated[lvl] in subgroups_containing_x:
-                    v = v_updated[lvl]
-                    if (v < mcb_pred <= v + lmbda) or (v == 0 and v <= mcb_pred <= v + lmbda):
+                    (v_i, v_j) = v_updated[lvl]
+                    if v_i < mcb_pred <= v_j:
                         # apply update, project onto [0, 1]
                         mcb_pred = np.clip(mcb_pred + delta[lvl], 0, 1)
 
         # get final prediciton from calib set v_hats
-        V_range = np.arange(0, 1, lmbda)
-        for v in V_range:
-            if (v < mcb_pred <= v + lmbda) or (v == 0 and v <= mcb_pred <= v + lmbda):
+        for v_i, v_j in zip(V_range, V_range[1:]):
+            if v_i < mcb_pred <= v_j:
                 # if empty interval, return same prediction
-                if self.v_hat_saved[-1][v] != -1:
-                    mcb_pred = self.v_hat_saved[-1][v]
+                if self.v_hat_saved[-1][(v_i, v_j)] != -1:
+                    mcb_pred = self.v_hat_saved[-1][(v_i, v_j)]
                 break
 
         return mcb_pred
