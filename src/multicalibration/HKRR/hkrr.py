@@ -52,6 +52,7 @@ class HKRRAlgorithm:
         p = confs.copy()
         n = len(confs)
         alpha = self.alpha
+        tao_global = self.tao_global
 
         # count iterations
         iter = 0
