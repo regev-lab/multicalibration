@@ -29,7 +29,7 @@ class MulticalibrationPredictor:
         else:
             raise ValueError(f"Multicalibration algorithm {algorithm} not recognized / supported.")
 
-    def fit(self, confs, labels, subgroups, params):
+    def fit(self, confs, labels, subgroups, params, continuous):
         """
         Returns vector of confidences on calibration set.
         
@@ -37,13 +37,14 @@ class MulticalibrationPredictor:
         @param labels: true labels
         @param subgroups: list of subgroups, each containing indices of samples
         @param params: dictionary of hyperparameters
+        @param continuous: whether to calibrate for continuous outcomes (experimental)
 
         HKRR params: alpha, lmbda, use_oracle=True, randomized=True, max_iter=float('inf')
         """
         if len(confs) != len(labels):
             raise ValueError("Number of confidence scores and labels must match.")
     
-        if self.num_classes == 2 and not np.all(np.isin(labels, [0, 1])):
+        if not continuous and (self.num_classes == 2 and not np.all(np.isin(labels, [0, 1]))):
             raise ValueError("Labels must be in the set \{ 0, 1 } for binary problems.")
         
         if self.num_classes > 2 and not np.all(np.isin(labels, np.arange(self.num_classes))):
